@@ -1,0 +1,5 @@
+*.pyc
+build/
+.eggs/
+maxflow/src/_maxflow.cpp
+maxflow/src/_maxflow.h
