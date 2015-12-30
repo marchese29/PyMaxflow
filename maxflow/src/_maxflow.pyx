@@ -14,7 +14,11 @@ np.import_array()
 
 cdef extern from "fastmin.h":
     cdef object c_aexpansion "aexpansion"(int, np.ndarray, np.ndarray, np.ndarray) except +
+    cdef object c_aexpansion_spatial "aexpansion_spatial"(int, np.ndarray, np.ndarray, np.ndarray, np.ndarray) except +
     cdef object c_abswap "abswap"(int, int, np.ndarray, np.ndarray, np.ndarray) except +
+
+def aexpansion_spatial_step(int alpha, np.ndarray D, np.ndarray V, np.ndarray U, np.ndarray labels):
+    return c_aexpansion_spatial(alpha, D, V, U, labels)
 
 def aexpansion_grid_step(int alpha, np.ndarray D, np.ndarray V, np.ndarray labels):
     """

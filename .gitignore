@@ -2,4 +2,7 @@
 build/
 .eggs/
 maxflow/src/_maxflow.cpp
+imaxflow/src/_maxflow.h
+*.egg-info/
+dist/
 maxflow/src/_maxflow.h

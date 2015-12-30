@@ -11,6 +11,9 @@
 #include "fastmin.h"
 #include "core/graph.h"
 
+#include <iostream>
+using namespace std;
+
 // This avoids linker errors on Windows
 #undef DL_IMPORT
 #define DL_IMPORT(t) t
@@ -52,6 +55,127 @@ PyObject* build_graph_energy_tuple<long>(Graph<long,long,long>* g, long energy)
     PyObject* res = Py_BuildValue("(l,O)", energy, graph);
     Py_XDECREF(graph);
     return res;
+}
+
+template<class T, class S>
+PyObject* aexpansion_spatial(int alpha, PyArrayObject* d, PyArrayObject* v, PyArrayObject* u,
+                        PyArrayObject* labels)
+{
+    typedef Graph<T,T,T> GraphT;
+
+    // Size of the labels matrix.
+    int ndim = PyArray_NDIM(labels);
+    npy_intp* shape = PyArray_DIMS(labels);
+
+    // Size of the spatial matrix
+    int udim = PyArray_NDIM(u);
+    npy_intp* ushape = PyArray_DIMS(u);
+
+    // Some shape checks.
+    if(PyArray_NDIM(d) != ndim+1)
+        throw std::runtime_error("the unary term matrix D must be SxL (L=number of labels, S=shape of labels array)");
+    if(PyArray_NDIM(v) != 2 || PyArray_DIM(v, 0) != PyArray_DIM(v, 1))
+        throw std::runtime_error("the binary term matrix V must be LxL (L=number of labels)");
+    if(PyArray_DIM(v,0) != PyArray_DIM(d, ndim))
+        throw std::runtime_error("the number of labels given by D differs from the number of labels given by V");
+    if(PyArray_TYPE(v) != numpy_typemap<T>::type)
+        throw std::runtime_error("the type for the binary term matrix V must match the type of the unary matrix D");
+    if(!std::equal(shape, shape+ndim, PyArray_DIMS(d)))
+        throw std::runtime_error("the shape of the labels array (S1,...,SN) must match the shape of the last dimensions of D (S1,...,SN,L)");
+    if(ushape[udim-1] != udim - 1)
+        throw std::runtime_error("the size of the final dimension of u should match the number of dimensions of u minus 1");
+
+    // Create the graph.
+    // The number of nodes and edges is unknown at this point,
+    // so they are roughly estimated.
+    int num_nodes = std::accumulate(shape, shape+ndim, 1, std::multiplies<int>());
+    GraphT* g = new GraphT(num_nodes, 2*ndim*num_nodes);
+    g->add_node(num_nodes);
+
+    // Get the array v from v_f.
+    // Esmooth<T> v(v_f);
+
+    // For each pixel in labels...
+    npy_intp* head_ind = new npy_intp[ndim+1];
+    npy_intp* ind = head_ind;
+    npy_intp* nind = new npy_intp[ndim];
+    std::fill(ind, ind+ndim, 0);
+    for(int node_index = 0; node_index < num_nodes; ++node_index)
+    {
+        // Take the label of current pixel.
+        S label = *reinterpret_cast<S*>(PyArray_GetPtr(labels, ind));
+        // Discard pixels not in the set P_{ab}.
+        head_ind[ndim] = alpha;
+        T t1 = *reinterpret_cast<T*>(PyArray_GetPtr(d, head_ind));
+        T t2 = std::numeric_limits<T>::max();
+        if(label != alpha)
+        {
+            head_ind[ndim] = label;
+            t2 = *reinterpret_cast<T*>(PyArray_GetPtr(d, head_ind));
+        }
+
+        g->add_tweights(node_index, t1, t2);
+
+        // Process the neighbors.
+        npy_intp *node_uind = new npy_intp;
+        *node_uind = node_index * ushape[udim-1];
+        for(int n = 0; n < ndim; ++n)
+        {
+            std::copy(ind, ind+ndim, nind);
+            ++nind[n];
+            // Discard bad neighbors.
+            if(nind[n] >= shape[n])
+                continue;
+
+            // Neighbor index and label.
+            int nnode_index = node_index + std::accumulate(shape+n+1, shape+ndim, 1, std::multiplies<int>());
+            S nlabel = *reinterpret_cast<S*>(PyArray_GetPtr(labels, nind));
+
+            npy_intp *uind = new npy_intp;
+            *uind = *node_uind + n;
+            T spatial_weight = *reinterpret_cast<T*>(PyArray_GETPTR3(u, node_index / ushape[0], node_index % ushape[0], n));
+            T dist_label_alpha = *reinterpret_cast<T*>(PyArray_GETPTR2(v, label, alpha));
+            T capacity = spatial_weight * dist_label_alpha;
+            if(label == nlabel)
+            {
+                g->add_edge(node_index, nnode_index, capacity, capacity);
+                continue;
+            }
+
+            // If labels are different, add an extra node.  We however, expect this to be a metric
+            T dist_label_nlabel = *reinterpret_cast<T*>(PyArray_GETPTR2(v, label, nlabel));
+            dist_label_nlabel *= spatial_weight;
+            T dist_nlabel_alpha = *reinterpret_cast<T*>(PyArray_GETPTR2(v, nlabel, alpha));
+            dist_nlabel_alpha *= spatial_weight;
+            int extra_index = g->add_node(1);
+            g->add_tweights(extra_index, 0, dist_label_nlabel);
+            g->add_edge(node_index, extra_index, dist_label_alpha, dist_label_alpha);
+            g->add_edge(nnode_index, extra_index, dist_nlabel_alpha, dist_nlabel_alpha);
+        }
+
+        // Update the index.
+        incr_indices(ind, ndim, shape);
+    }
+
+    // The graph cut.
+    T energy = g->maxflow();
+
+    // Update the labels with the maxflow result.
+    std::fill(ind, ind+ndim, 0);
+    for(int node_index = 0; node_index < num_nodes; ++node_index)
+    {
+        if(g->what_segment(node_index) == SINK)
+            *reinterpret_cast<S*>(PyArray_GetPtr(labels, ind)) = alpha;
+
+        // Update the index.
+        incr_indices(ind, ndim, shape);
+    }
+
+    delete [] head_ind;
+    delete [] nind;
+
+    // Return the graph and the energy of the mincut.
+    return build_graph_energy_tuple<T>(g, energy);
 }
 
 /*
@@ -185,6 +309,21 @@ PyObject* aexpansion_(int alpha, PyArrayObject* d, PyArrayObject* v, PyArrayObje
     }
 }
 
+template<class T>
+PyObject* aexpansion_spatial_(int alpha, PyArrayObject* d, PyArrayObject* v, PyArrayObject* u, PyArrayObject* labels)
+{
+    switch(PyArray_TYPE(labels))
+    {
+    DISPATCH(aexpansion_spatial, char, (alpha, d, v, u, labels));
+    DISPATCH(aexpansion_spatial, short, (alpha, d, v, u, labels));
+    DISPATCH(aexpansion_spatial, int, (alpha, d, v, u, labels));
+    DISPATCH(aexpansion_spatial, long, (alpha, d, v, u, labels));
+    DISPATCH(aexpansion_spatial, long long, (alpha, d, v, u, labels));
+    default:
+        throw std::runtime_error("invalid type for labels (should be any integer type)");
+    }
+}
+
 // Access point for the aexpansion function.
 PyObject* aexpansion(int alpha, PyArrayObject* d, PyArrayObject* v,
                 PyArrayObject* labels)
@@ -193,6 +332,16 @@ PyObject* aexpansion(int alpha, PyArrayObject* d, PyArrayObject* v,
         return aexpansion_<double>(alpha, d, v, labels);
     else if(PyArray_TYPE(d) == NPY_LONG)
         return aexpansion_<long>(alpha, d, v, labels);
+    else
+        throw std::runtime_error("the type of the unary term D is not valid (should be np.double or np.int)");
+}
+
+PyObject* aexpansion_spatial(int alpha, PyArrayObject* d, PyArrayObject* v, PyArrayObject* u, PyArrayObject* labels)
+{
+    if (PyArray_TYPE(d) == NPY_DOUBLE)
+        return aexpansion_spatial_<double>(alpha, d, v, u, labels);
+    else if(PyArray_TYPE(d) == NPY_LONG)
+        return aexpansion_spatial_<long>(alpha, d, v, u, labels);
     else
         throw std::runtime_error("the type of the unary term D is not valid (should be np.double or np.int)");
 }

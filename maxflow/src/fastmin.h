@@ -10,9 +10,8 @@
 
 #include "core/graph.h"
 
-PyObject* abswap(int alpha, int beta, PyArrayObject* d,
-                PyArrayObject* v, PyArrayObject* labels);
-PyObject* aexpansion(int alpha, PyArrayObject* d,
-                PyArrayObject* v, PyArrayObject* labels);
+PyObject* abswap(int alpha, int beta, PyArrayObject* d, PyArrayObject* v, PyArrayObject* labels);
+PyObject* aexpansion(int alpha, PyArrayObject* d, PyArrayObject* v, PyArrayObject* labels);
+PyObject* aexpansion_spatial(int alpha, PyArrayObject* d, PyArrayObject* v, PyArrayObject* u, PyArrayObject* labels);
 
 #endif

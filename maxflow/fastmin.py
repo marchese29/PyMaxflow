@@ -18,7 +18,7 @@ grids with von Neumann neighborhood.
 import sys
 from itertools import count, combinations
 import numpy as np
-from _maxflow import aexpansion_grid_step, abswap_grid_step
+from _maxflow import aexpansion_grid_step, aexpansion_spatial_step, abswap_grid_step
 
 def energy_of_grid_labeling(D, V, labels):
     """
@@ -120,6 +120,47 @@ def abswap_grid(D, V, max_cycles=None, labels=None):
         if not improved:
             break
     
+    return labels
+
+def aexpansion_spatial(D, V, U, max_cycles=None, labels=None):
+    """
+    Minimize an energy function iterating the alpha-expansion until
+    convergence or until a maximum number of cycles
+    given by ``max_cycles``, is reached.
+    """
+    num_labels = D.shape[-1]
+
+    if labels is None:
+        # Avoid using too much memory.
+        if num_labels <= 127:
+            labels = np.int8(D.argmin(axis=-1))
+        else:
+            labels = np.int_(D.argmin(axis=-1))
+
+    if max_cycles is None:
+        rng = count()
+    else:
+        rng = xrange(max_cycles)
+
+    better_energy = np.inf
+    # Cycles.
+    for i in rng:
+        print >> sys.stderr, "Cycle", i
+        improved = False
+        # Iterate through the labels.
+        for alpha in xrange(num_labels):
+            energy, _ = aexpansion_spatial_step(alpha, D, V, U, labels)
+            strimproved = ""
+            # Check if the better energy has been improved.
+            if energy < better_energy:
+                better_energy = energy
+                improved = True
+                strimproved = " (Improved!)"
+            print >> sys.stderr, "Energy of the last cut (α=%r): %r%s" % (alpha, energy, strimproved)
+
+        # Finish the minimization when convergence is reached.
+        if not improved:
+            break
     return labels
 
 def aexpansion_grid(D, V, max_cycles=None, labels=None):
